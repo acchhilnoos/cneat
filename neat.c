@@ -103,7 +103,6 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
     h->entries = calloc(h->cap, sizeof(struct Entry *));
     if (!h->entries) {
       h->entries = old;
-      fprintf(stderr, "Error: Rehashing failed due to memory allocation.\n");
       return -1;
     }
 
@@ -359,13 +358,12 @@ void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
     c->enabled = TRUE;
     c->id = ht_insert(h, c->in, c->out);
     // TODO: insert check
-    // TODO: mutate check
     return;
   }
+  // TODO: mutate check
 }
 
 void mut_add_node(struct Genome *g, struct Hashtbl *h) {
-  // TODO: history check
   if (frand1() > P_MUT_ADD_NODE)
     return;
   if (g->conns->size == 0)
@@ -425,16 +423,14 @@ void mutate(struct Population *p) {
 }
 
 int main(int argc, char *argv[]) {
-  // srandom(time(NULL));
+  srandom(time(NULL));
   srandom(1);
   struct Population *p = init_population();
 
   dump(p);
-
   mutate(p);
   mutate(p);
   mutate(p);
-
   dump(p);
   // dump_dot(p, "genome_mutated.dot");
 
