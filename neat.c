@@ -9,10 +9,10 @@
 #define GENOME_NUM_IN 2
 #define GENOME_NUM_OUT 1
 #define GENOME_INIT_SIZE (GENOME_NUM_IN + GENOME_NUM_OUT) // < DA_INIT_SIZE
-#define HASH_INIT_SIZE (2 * DA_INIT_SIZE)
-#define HASH_NUM_BUCKETS 32
+#define HASH_INIT_CAP (2 * DA_INIT_SIZE)
+#define HASH_INIT_BUCKETS 32
 
-#define HASH(X, Y) (((23 * 31 + X) * 31 + Y) % HASH_NUM_BUCKETS)
+#define HASH(X, Y, Z) (((23 * 31 + X) * 31 + Y) % Z->size)
 
 #ifndef DEBUG
 #define POPULATION_SIZE 16
@@ -82,45 +82,36 @@ struct Hashtbl *init_hashtbl() {
   struct Hashtbl *h = malloc(sizeof(*h));
   if (!h)
     return NULL;
-  h->entries = calloc(HASH_NUM_BUCKETS, sizeof(*h->entries));
+  h->entries = calloc(HASH_INIT_BUCKETS, sizeof(*h->entries));
   if (!h->entries) {
     free(h);
     return NULL;
   }
   h->size = 0;
-  h->cap = HASH_INIT_SIZE;
+  h->cap = HASH_INIT_CAP;
   return h;
 }
 
 int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
-  size_t hash = HASH(in, out);
-  struct Entry *e = h->entries[hash];
+  size_t hash = HASH(in, out, h);
+  struct Entry **e = &h->entries[hash];
   if (h->size + 1 > h->cap) {
     // TODO: rehash
   }
-  if (!e) {
-    e = malloc(sizeof(*e));
-    if (!e)
-      return -1;
-    e->in = in;
-    e->out = out;
-    e->id = next_conn_id++;
-    return e->id;
+  while (*e) {
+    if ((*e)->in == in && (*e)->out == out)
+      return (*e)->id;
+    e = &(*e)->next;
   }
-  for (;;) {
-    if (e->next)
-      e = e->next;
-    else {
-      e = malloc(sizeof(*e));
-      if (!e)
-        return -1;
-      e->in = in;
-      e->out = out;
-      e->id = next_conn_id++;
-      h->size++;
-      return e->id;
-    }
-  }
+  *e = malloc(sizeof(**e));
+  if (!*e)
+    return -1;
+  (*e)->in = in;
+  (*e)->out = out;
+  (*e)->id = next_conn_id++;
+  (*e)->next = NULL;
+  h->size++;
+  return (*e)->id;
 }
 
 Conn_DA *init_conns() {
@@ -231,7 +222,7 @@ void wipe(struct Population *p) {
     DA_FREE(p->genomes[i].nodes);
   }
   free(p->genomes);
-  for (int i = 0; i < HASH_NUM_BUCKETS; i++) {
+  for (int i = 0; i < HASH_INIT_BUCKETS; i++) {
     struct Entry *c = p->history->entries[i];
     while (c) {
       struct Entry *n = c->next;
@@ -259,7 +250,6 @@ void mutate_weights(struct Genome *g) {
 }
 
 void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
-  // TODO: history check
   if (frand1() > P_MUT_ADD_CONN)
     return;
   if (g->conns->size + 1 >= g->conns->cap) {
@@ -286,6 +276,8 @@ void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
   }
   c->weight = 1.0f;
   c->enabled = TRUE;
+  c->id = ht_insert(h, c->in, c->out);
+  // TODO: insert check
 }
 
 void mut_add_node(struct Genome *g, struct Hashtbl *h) {
@@ -317,11 +309,13 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   n1->out = n->id;
   n1->weight = 1.0f;
   n1->enabled = TRUE;
+  n1->id = ht_insert(h, n1->in, n1->out);
   struct Conn *n2 = &DA_AT(g->conns, g->conns->size++);
-  n2->id = c->in;
+  n2->in = n->id;
   n2->out = c->out;
-  n2->weight = 1.0f;
+  n2->weight = c->weight;
   n2->enabled = TRUE;
+  n2->id = ht_insert(h, n2->in, n2->out);
 }
 
 void mutate(struct Population *p) {
@@ -345,7 +339,7 @@ void mutate(struct Population *p) {
 }
 
 int main(int argc, char *argv[]) {
-  srand(time(NULL));
+  srandom(time(NULL));
   struct Population *p = init_population();
   dump(p);
   mutate(p);
