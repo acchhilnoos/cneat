@@ -26,6 +26,8 @@
 #define P_MUT_ADD_NODE 1.0f
 #endif
 
+#define MUT_MAX_ATTEMPTS 5
+
 #define DEFINE_STRUCT_DA(TYPE)                                                 \
   typedef struct {                                                             \
     struct TYPE *data;                                                         \
@@ -95,15 +97,17 @@ struct Hashtbl *init_hashtbl() {
 int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
   if ((float)h->size / h->cap > HASH_LOAD_THRESHOLD) {
     struct Entry **old = h->entries;
+    size_t old_cap = h->cap;
+    h->cap *= 2;
 
-    h->entries = calloc(h->cap * 2, sizeof(struct Entry *));
+    h->entries = calloc(h->cap, sizeof(struct Entry *));
     if (!h->entries) {
       h->entries = old;
       fprintf(stderr, "Error: Rehashing failed due to memory allocation.\n");
       return -1;
     }
 
-    for (size_t i = 0; i < h->cap; i++) {
+    for (size_t i = 0; i < old_cap; i++) {
       struct Entry *e = old[i];
       while (e) {
         struct Entry *next = e->next;
@@ -114,7 +118,6 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
       }
     }
     free(old);
-    h->cap *= 2;
   }
 
   size_t hash = HASH(in, out, h);
@@ -237,6 +240,49 @@ void dump(struct Population *p) {
   }
 }
 
+void dump_dot(struct Population *p, const char *fname) {
+  FILE *f = fopen(fname, "w");
+  if (!f) {
+    fprintf(stderr, "Error opening file %s\n", fname);
+    return;
+  }
+
+  fprintf(f, "digraph Genome {\n");
+  fprintf(f, "\trankdir=LR;\n");
+
+  // For this example, we'll just dump the first genome
+  struct Genome *g = &p->genomes[0];
+
+  // Declare nodes with styles
+  for (size_t i = 0; i < g->nodes->size; i++) {
+    struct Node *n = &DA_AT(g->nodes, i);
+    const char *shape = "circle";
+    const char *color = "grey";
+    if (n->type == INPUT) {
+      shape = "box";
+      color = "green";
+    } else if (n->type == OUTPUT) {
+      shape = "box";
+      color = "blue";
+    }
+    fprintf(
+        f, "\t%zu [shape=%s, style=filled, fillcolor=%s, label=\"ID: %zu\"];\n",
+        n->id, shape, color, n->id);
+  }
+
+  // Declare connections
+  for (size_t i = 0; i < g->conns->size; i++) {
+    struct Conn *c = &DA_AT(g->conns, i);
+    const char *style = c->enabled ? "solid" : "dotted";
+    const char *color = c->enabled ? "black" : "grey";
+    fprintf(f, "\t%zu -> %zu [label=\"%.2f\", style=%s, color=%s];\n", c->in,
+            c->out, c->weight, style, color);
+  }
+
+  fprintf(f, "}\n");
+  fclose(f);
+}
+
 void wipe(struct Population *p) {
   for (int i = 0; i < POPULATION_SIZE; i++) {
     DA_FREE(p->genomes[i].conns);
@@ -273,32 +319,49 @@ void mutate_weights(struct Genome *g) {
 void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
   if (frand1() > P_MUT_ADD_CONN)
     return;
-  if (g->conns->size + 1 >= g->conns->cap) {
-    g->conns->data =
-        // TODO: realloc check
-        realloc(g->conns->data, 2 * g->conns->cap * sizeof(*g->conns->data));
-    g->conns->cap *= 2;
+  for (int i = 0; i < MUT_MAX_ATTEMPTS; i++) {
+    struct Node *in;
+    struct Node *out;
+    do {
+      in = &DA_AT(g->nodes, random() % g->nodes->size);
+    } while (in->type == OUTPUT);
+    do {
+      out = &DA_AT(g->nodes, random() % g->nodes->size);
+    } while (out->type == INPUT || out == in);
+
+    char exists = 0;
+    for (int j = 0; j < g->conns->size; j++) {
+      struct Conn *c = &DA_AT(g->conns, j);
+      if (c->in == in->id && c->out == out->id ||
+          c->in == out->id && c->out == in->id) {
+        exists = 1;
+        break;
+      }
+    }
+    if (exists)
+      continue;
+
+    if (g->conns->size + 1 >= g->conns->cap) {
+      g->conns->data =
+          // TODO: realloc check
+          realloc(g->conns->data, 2 * g->conns->cap * sizeof(*g->conns->data));
+      g->conns->cap *= 2;
+    }
+    struct Conn *c = &DA_AT(g->conns, g->conns->size++);
+    c->in = in->id;
+    c->out = out->id;
+    if (c->in > c->out && out->type != OUTPUT) {
+      c->in ^= c->out;
+      c->out ^= c->in;
+      c->in ^= c->out;
+    }
+    c->weight = 1.0f;
+    c->enabled = TRUE;
+    c->id = ht_insert(h, c->in, c->out);
+    // TODO: insert check
+    // TODO: mutate check
+    return;
   }
-  struct Conn *c = &DA_AT(g->conns, g->conns->size++);
-  struct Node *in;
-  struct Node *out;
-  do {
-    in = &DA_AT(g->nodes, random() % g->nodes->size);
-  } while (in->type == OUTPUT);
-  do {
-    out = &DA_AT(g->nodes, random() % g->nodes->size);
-  } while (out->type == INPUT || out == in);
-  c->in = in->id;
-  c->out = out->id;
-  if (c->in > c->out && out->type != OUTPUT) {
-    c->in ^= c->out;
-    c->out ^= c->in;
-    c->in ^= c->out;
-  }
-  c->weight = 1.0f;
-  c->enabled = TRUE;
-  c->id = ht_insert(h, c->in, c->out);
-  // TODO: insert check
 }
 
 void mut_add_node(struct Genome *g, struct Hashtbl *h) {
@@ -362,11 +425,23 @@ void mutate(struct Population *p) {
 }
 
 int main(int argc, char *argv[]) {
-  srandom(time(NULL));
+  // srandom(time(NULL));
+  srandom(1);
   struct Population *p = init_population();
+
   dump(p);
+
   mutate(p);
+  mutate(p);
+  mutate(p);
+
   dump(p);
+  // dump_dot(p, "genome_mutated.dot");
+
   wipe(p);
+
+  // printf("Use 'dot -Tpng genome_mutated.dot -o genome_mutated.png' to
+  // render.\n");
+
   return EXIT_SUCCESS;
 }
