@@ -9,10 +9,10 @@
 #define GENOME_NUM_IN 2
 #define GENOME_NUM_OUT 1
 #define GENOME_INIT_SIZE (GENOME_NUM_IN + GENOME_NUM_OUT) // < DA_INIT_SIZE
-#define HASH_INIT_CAP (2 * DA_INIT_SIZE)
 #define HASH_INIT_BUCKETS 32
+#define HASH_LOAD_THRESHOLD 0.75f
 
-#define HASH(X, Y, Z) (((23 * 31 + X) * 31 + Y) % Z->size)
+#define HASH(X, Y, H) (((23 * 31 + X) * 31 + Y) % H->cap)
 
 #ifndef DEBUG
 #define POPULATION_SIZE 16
@@ -82,22 +82,43 @@ struct Hashtbl *init_hashtbl() {
   struct Hashtbl *h = malloc(sizeof(*h));
   if (!h)
     return NULL;
-  h->entries = calloc(HASH_INIT_BUCKETS, sizeof(*h->entries));
+  h->cap = HASH_INIT_BUCKETS;
+  h->entries = calloc(h->cap, sizeof(*h->entries));
   if (!h->entries) {
     free(h);
     return NULL;
   }
   h->size = 0;
-  h->cap = HASH_INIT_CAP;
   return h;
 }
 
 int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
+  if ((float)h->size / h->cap > HASH_LOAD_THRESHOLD) {
+    struct Entry **old = h->entries;
+
+    h->entries = calloc(h->cap * 2, sizeof(struct Entry *));
+    if (!h->entries) {
+      h->entries = old;
+      fprintf(stderr, "Error: Rehashing failed due to memory allocation.\n");
+      return -1;
+    }
+
+    for (size_t i = 0; i < h->cap; i++) {
+      struct Entry *e = old[i];
+      while (e) {
+        struct Entry *next = e->next;
+        size_t hash = HASH(e->in, e->out, h);
+        e->next = h->entries[hash];
+        h->entries[hash] = e;
+        e = next;
+      }
+    }
+    free(old);
+    h->cap *= 2;
+  }
+
   size_t hash = HASH(in, out, h);
   struct Entry **e = &h->entries[hash];
-  if (h->size + 1 > h->cap) {
-    // TODO: rehash
-  }
   while (*e) {
     if ((*e)->in == in && (*e)->out == out)
       return (*e)->id;
@@ -222,7 +243,7 @@ void wipe(struct Population *p) {
     DA_FREE(p->genomes[i].nodes);
   }
   free(p->genomes);
-  for (int i = 0; i < HASH_INIT_BUCKETS; i++) {
+  for (size_t i = 0; i < p->history->cap; i++) {
     struct Entry *c = p->history->entries[i];
     while (c) {
       struct Entry *n = c->next;
@@ -310,12 +331,14 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   n1->weight = 1.0f;
   n1->enabled = TRUE;
   n1->id = ht_insert(h, n1->in, n1->out);
+  // TODO: insert check
   struct Conn *n2 = &DA_AT(g->conns, g->conns->size++);
   n2->in = n->id;
   n2->out = c->out;
   n2->weight = c->weight;
   n2->enabled = TRUE;
   n2->id = ht_insert(h, n2->in, n2->out);
+  // TODO: insert check
 }
 
 void mutate(struct Population *p) {
