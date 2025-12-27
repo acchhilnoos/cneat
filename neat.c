@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define DEBUG
+// #define DEBUG
 
 #define DA_INIT_SIZE 16
 #define GENOME_NUM_IN 2
@@ -26,7 +26,7 @@
 #define P_MUT_ADD_NODE 1.0f
 #endif
 
-#define MUT_MAX_ATTEMPTS 5
+#define ADD_CONN_MAX_ATTEMPTS 5
 
 #define DEFINE_STRUCT_DA(TYPE)                                                 \
   typedef struct {                                                             \
@@ -83,13 +83,11 @@ struct Population {
 struct Hashtbl *init_hashtbl() {
   struct Hashtbl *h = malloc(sizeof(*h));
   if (!h)
-    return NULL;
+    exit(EXIT_FAILURE);
   h->cap = HASH_INIT_BUCKETS;
   h->entries = calloc(h->cap, sizeof(*h->entries));
-  if (!h->entries) {
-    free(h);
-    return NULL;
-  }
+  if (!h->entries)
+    exit(EXIT_FAILURE);
   h->size = 0;
   return h;
 }
@@ -101,10 +99,8 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
     h->cap *= 2;
 
     h->entries = calloc(h->cap, sizeof(struct Entry *));
-    if (!h->entries) {
-      h->entries = old;
-      return -1;
-    }
+    if (!h->entries)
+      exit(EXIT_FAILURE);
 
     for (size_t i = 0; i < old_cap; i++) {
       struct Entry *e = old[i];
@@ -128,7 +124,7 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
   }
   *e = malloc(sizeof(**e));
   if (!*e)
-    return -1;
+    exit(EXIT_FAILURE);
   (*e)->in = in;
   (*e)->out = out;
   (*e)->id = next_conn_id++;
@@ -140,12 +136,10 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
 Conn_DA *init_conns() {
   Conn_DA *c = malloc(sizeof(*c));
   if (!c)
-    return NULL;
+    exit(EXIT_FAILURE);
   c->data = calloc(DA_INIT_SIZE, sizeof(*c->data));
-  if (!c->data) {
-    free(c);
-    return NULL;
-  }
+  if (!c->data)
+    exit(EXIT_FAILURE);
   c->size = 0;
   c->cap = DA_INIT_SIZE;
   return c;
@@ -154,12 +148,10 @@ Conn_DA *init_conns() {
 Node_DA *init_nodes() {
   Node_DA *n = malloc(sizeof(*n));
   if (!n)
-    return NULL;
+    exit(EXIT_FAILURE);
   n->data = calloc(DA_INIT_SIZE, sizeof(*n->data));
-  if (!n->data) {
-    free(n);
-    return NULL;
-  }
+  if (!n->data)
+    exit(EXIT_FAILURE);
   for (int i = 0; i < GENOME_INIT_SIZE; i++) {
     DA_AT(n, i).id = next_node_id++;
     DA_AT(n, i).type = i < GENOME_NUM_IN ? INPUT : OUTPUT;
@@ -173,27 +165,14 @@ Node_DA *init_nodes() {
 struct Genome *init_genomes() {
   struct Genome *g = calloc(POPULATION_SIZE, sizeof(*g));
   if (!g)
-    return NULL;
+    exit(EXIT_FAILURE);
   for (int i = 0; i < POPULATION_SIZE; i++) {
     g[i].conns = init_conns();
-    if (!g[i].conns) {
-      for (int j = 0; j < i; j++) {
-        DA_FREE(g[j].conns);
-        DA_FREE(g[j].nodes);
-      }
-      free(g);
-      return NULL;
-    }
+    if (!g[i].conns)
+      exit(EXIT_FAILURE);
     g[i].nodes = init_nodes();
-    if (!g[i].nodes) {
-      for (int j = 0; j < i; j++) {
-        DA_FREE(g[j].conns);
-        DA_FREE(g[j].nodes);
-      }
-      DA_FREE(g[i].conns);
-      free(g);
-      return NULL;
-    }
+    if (!g[i].nodes)
+      exit(EXIT_FAILURE);
   }
   return g;
 }
@@ -201,18 +180,13 @@ struct Genome *init_genomes() {
 struct Population *init_population() {
   struct Population *p = malloc(sizeof(*p));
   if (!p)
-    return NULL;
+    exit(EXIT_FAILURE);
   p->genomes = init_genomes();
-  if (!p->genomes) {
-    free(p);
-    return NULL;
-  }
+  if (!p->genomes)
+    exit(EXIT_FAILURE);
   p->history = init_hashtbl();
-  if (!p->history) {
-    free(p);
-    free(p->genomes);
-    return NULL;
-  }
+  if (!p->history)
+    exit(EXIT_FAILURE);
   return p;
 }
 
@@ -241,10 +215,8 @@ void dump(struct Population *p) {
 
 void dump_dot(struct Population *p, const char *fname) {
   FILE *f = fopen(fname, "w");
-  if (!f) {
-    fprintf(stderr, "Error opening file %s\n", fname);
-    return;
-  }
+  if (!f)
+    exit(EXIT_FAILURE);
 
   fprintf(f, "digraph Genome {\n");
   fprintf(f, "\trankdir=LR;\n");
@@ -318,7 +290,7 @@ void mutate_weights(struct Genome *g) {
 void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
   if (frand1() > P_MUT_ADD_CONN)
     return;
-  for (int i = 0; i < MUT_MAX_ATTEMPTS; i++) {
+  for (int i = 0; i < ADD_CONN_MAX_ATTEMPTS; i++) {
     struct Node *in;
     struct Node *out;
     do {
@@ -349,18 +321,11 @@ void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
     struct Conn *c = &DA_AT(g->conns, g->conns->size++);
     c->in = in->id;
     c->out = out->id;
-    if (c->in > c->out && out->type != OUTPUT) {
-      c->in ^= c->out;
-      c->out ^= c->in;
-      c->in ^= c->out;
-    }
     c->weight = 1.0f;
     c->enabled = TRUE;
     c->id = ht_insert(h, c->in, c->out);
-    // TODO: insert check
     return;
   }
-  // TODO: mutate check
 }
 
 void mut_add_node(struct Genome *g, struct Hashtbl *h) {
@@ -392,14 +357,12 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   n1->weight = 1.0f;
   n1->enabled = TRUE;
   n1->id = ht_insert(h, n1->in, n1->out);
-  // TODO: insert check
   struct Conn *n2 = &DA_AT(g->conns, g->conns->size++);
   n2->in = n->id;
   n2->out = c->out;
   n2->weight = c->weight;
   n2->enabled = TRUE;
   n2->id = ht_insert(h, n2->in, n2->out);
-  // TODO: insert check
 }
 
 void mutate(struct Population *p) {
@@ -423,7 +386,7 @@ void mutate(struct Population *p) {
 }
 
 int main(int argc, char *argv[]) {
-  srandom(time(NULL));
+  // srandom(time(NULL));
   srandom(1);
   struct Population *p = init_population();
 
@@ -431,8 +394,10 @@ int main(int argc, char *argv[]) {
   mutate(p);
   mutate(p);
   mutate(p);
+  mutate(p);
+  mutate(p);
   dump(p);
-  // dump_dot(p, "genome_mutated.dot");
+  dump_dot(p, "genome_mutated.dot");
 
   wipe(p);
 
