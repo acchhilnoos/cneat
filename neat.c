@@ -1,4 +1,3 @@
-#include <cstdlib>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,7 +6,7 @@
 #define DA_INIT_SIZE 16
 #define GENOME_NUM_IN 2
 #define GENOME_NUM_OUT 1
-#define GENOME_INIT_SIZE (GENOME_NUM_IN + GENOME_NUM_OUT) // < DA_INIT_SIZE
+#define GENOME_INIT_SIZE (GENOME_NUM_IN + GENOME_NUM_OUT)
 #define HASH_INIT_BUCKETS 32
 #define HASH_LOAD_THRESHOLD 0.75f
 
@@ -24,7 +23,7 @@
 #define P_MUT_ADD_CONN 0.05f
 #define P_MUT_ADD_NODE 0.03f
 #else
-#define POPULATION_SIZE 5
+#define POPULATION_SIZE 3
 #define P_MUT_WEIGHTS 1.0f
 #define P_MUT_ADD_CONN 1.0f
 #define P_MUT_ADD_NODE 1.0f
@@ -225,7 +224,8 @@ void dump(struct Population *p) {
     printf("  Connections: %zu\n", g->conns->size);
     for (int j = 0; j < g->conns->size; j++) {
       struct Conn *c = &DA_AT(g->conns, j);
-      printf("    [%2zu] %2zu %3zu | %7.3f\n", c->id, c->in, c->out, c->weight);
+      printf("%c   [%2zu] %2zu %3zu | %7.3f\n", c->enabled ? ' ' : 'x', c->id,
+             c->in, c->out, c->weight);
     }
   }
 }
@@ -270,7 +270,7 @@ int compare_conn_id(const void *a, const void *b) {
   return 0;
 }
 
-struct Genome *crossover(struct Genome *p1, struct Genome *p2) {
+struct Genome *crossover(struct Genome *g1, struct Genome *g2) {
   struct Genome *child = malloc(sizeof(*child));
   if (!child)
     exit(EXIT_FAILURE);
@@ -279,30 +279,28 @@ struct Genome *crossover(struct Genome *p1, struct Genome *p2) {
   child->nodes->size = 0;
 
   struct Genome *mfit, *lfit;
-  if (p1->fitness > p2->fitness) {
-    mfit = p1;
-    lfit = p2;
-  } else if (p2->fitness > p1->fitness) {
-    mfit = p2;
-    lfit = p1;
+  if (g1->fitness > g2->fitness) {
+    mfit = g1;
+    lfit = g2;
+  } else if (g2->fitness > g1->fitness) {
+    mfit = g2;
+    lfit = g1;
   } else {
-    mfit = (random() % 2 == 0) ? p1 : p2;
-    lfit = (mfit == p1) ? p2 : p1;
+    mfit = (random() % 2 == 0) ? g1 : g2;
+    lfit = (mfit == g1) ? g2 : g1;
   }
 
-  qsort(p1->conns->data, p1->conns->size, sizeof(struct Conn), compare_conn_id);
-  qsort(p2->conns->data, p2->conns->size, sizeof(struct Conn), compare_conn_id);
+  qsort(g1->conns->data, g1->conns->size, sizeof(struct Conn), compare_conn_id);
+  qsort(g2->conns->data, g2->conns->size, sizeof(struct Conn), compare_conn_id);
 
   size_t i = 0, j = 0;
   while (i < mfit->conns->size && j < lfit->conns->size) {
     struct Conn *ci = &DA_AT(mfit->conns, i);
     struct Conn *cj = &DA_AT(lfit->conns, j);
 
-    DA_ADD(child->conns, c, Conn);
-    // struct Conn *c = &DA_AT(child->conns, child->conns->size++);
-
     if (ci->id == cj->id) {
       struct Conn *chosen = (random() % 2 == 0) ? ci : cj;
+      DA_ADD(child->conns, c, Conn);
       copy_conn(chosen, c);
       if (!ci->enabled || !cj->enabled) {
         if (frand1() < 0.75)
@@ -311,16 +309,15 @@ struct Genome *crossover(struct Genome *p1, struct Genome *p2) {
       i++;
       j++;
     } else if (ci->id < cj->id) {
+      DA_ADD(child->conns, c, Conn);
       copy_conn(ci, c);
       i++;
     } else {
-      // child->conns->size--; ?????
       j++;
     }
   }
   while (i < mfit->conns->size) {
     DA_ADD(child->conns, c, Conn);
-    // struct Conn *c = &DA_AT(child->conns, child->conns->size++);
     copy_conn(&DA_AT(mfit->conns, i), c);
     i++;
   }
@@ -332,40 +329,46 @@ struct Genome *crossover(struct Genome *p1, struct Genome *p2) {
     if (DA_AT(child->conns, i).out > max_id)
       max_id = DA_AT(child->conns, i).out;
   }
-  char *nodes_added = calloc(max_id + 1, sizeof(char));
-  if (!nodes_added)
+  char *added = calloc(max_id + 1, sizeof(char));
+  if (!added)
     exit(EXIT_FAILURE);
 
   for (i = 0; i < GENOME_INIT_SIZE; i++) {
-    if (!nodes_added[i]) {
+    if (!added[i]) {
       DA_ADD(child->nodes, n, Node);
-      // struct Node *n = &DA_AT(child->nodes, child->nodes->size++);
       n->id = i;
       n->type = i < GENOME_NUM_IN ? INPUT : OUTPUT;
-      nodes_added[i] = 1;
+      added[i] = 1;
     }
   }
 
   for (i = 0; i < child->conns->size; i++) {
     struct Conn *c = &DA_AT(child->conns, i);
-    if (!nodes_added[c->in]) {
+    if (!added[c->in]) {
       DA_ADD(child->nodes, n, Node);
-      // struct Node *n = &DA_AT(child->nodes, child->nodes->size++);
       n->id = c->in;
       n->type = HIDDEN;
-      nodes_added[c->in] = 1;
+      added[c->in] = 1;
     }
-    if (!nodes_added[c->out]) {
+    if (!added[c->out]) {
       DA_ADD(child->nodes, n, Node);
-      // struct Node *n = &DA_AT(child->nodes, child->nodes->size++);
       n->id = c->out;
       n->type = HIDDEN;
-      nodes_added[c->out] = 1;
+      added[c->out] = 1;
     }
   }
 
-  free(nodes_added);
+  free(added);
   return child;
+}
+
+void reproduce(struct Population *p) {
+  // TODO: evaluate, speciate, reproduce, mutate
+  struct Genome *x = crossover(&p->genomes[0], &p->genomes[1]);
+  DA_FREE(p->genomes[2].conns);
+  DA_FREE(p->genomes[2].nodes);
+  p->genomes[2] = *x;
+  free(x);
 }
 
 // mutation {{{
@@ -409,14 +412,6 @@ void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
       continue;
 
     DA_ADD(g->conns, c, Conn);
-    // if (g->conns->size + 1 >= g->conns->cap) {
-    //   g->conns->cap *= 2;
-    //   g->conns->data =
-    //       realloc(g->conns->data, g->conns->cap * sizeof(*g->conns->data));
-    //   if (!g->conns->data)
-    //     exit(EXIT_FAILURE);
-    // }
-    // struct Conn *c = &DA_AT(g->conns, g->conns->size++);
     c->in = in->id;
     c->out = out->id;
     c->weight = 1.0f;
@@ -432,35 +427,18 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   if (g->conns->size == 0)
     return;
   DA_ADD(g->nodes, n, Node);
-  // if (g->nodes->size + 1 >= g->nodes->cap) {
-  //   g->nodes->cap *= 2;
-  //   g->nodes->data =
-  //       realloc(g->nodes->data, g->nodes->cap * sizeof(*g->nodes->data));
-  //   if (!g->nodes->data)
-  //     exit(EXIT_FAILURE);
-  // }
-  // struct Node *n = &DA_AT(g->nodes, g->nodes->size++);
   n->id = next_node_id++;
   n->type = HIDDEN;
   n->value = 0.0f;
   struct Conn *c = &DA_AT(g->conns, random() % g->conns->size);
   c->enabled = FALSE;
   DA_ADD(g->conns, n1, Conn);
-  DA_ADD(g->conns, n2, Conn);
-  // if (g->conns->size + 2 >= g->conns->cap) {
-  //   g->conns->cap *= 2;
-  //   g->conns->data =
-  //       realloc(g->conns->data, g->conns->cap * sizeof(*g->conns->data));
-  //   if (!g->conns->data)
-  //     exit(EXIT_FAILURE);
-  // }
-  // struct Conn *n1 = &DA_AT(g->conns, g->conns->size++);
-  // struct Conn *n2 = &DA_AT(g->conns, g->conns->size++);
   n1->in = c->in;
   n1->out = n->id;
   n1->weight = 1.0f;
   n1->enabled = TRUE;
   n1->id = ht_insert(h, n1->in, n1->out);
+  DA_ADD(g->conns, n2, Conn);
   n2->in = n->id;
   n2->out = c->out;
   n2->weight = c->weight;
@@ -497,7 +475,7 @@ int main(int argc, char *argv[]) {
   dump(p);
   mutate(p);
   mutate(p);
-  mutate(p);
+  reproduce(p);
   dump(p);
 
   wipe(p);
