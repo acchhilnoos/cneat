@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <time.h>
 
+#define ACTIVATION_STEPS 5
+#define ADD_CONN_MAX_ATTEMPTS 5
 #define DA_INIT_SIZE 16
 #define GENOME_NUM_IN 2
 #define GENOME_NUM_OUT 1
@@ -10,12 +12,7 @@
 #define HASH_INIT_BUCKETS 32
 #define HASH_LOAD_THRESHOLD 0.75f
 
-#define HASH(X, Y, H) (((23 * 31 + X) * 31 + Y) % H->cap)
-
 #define DEBUG
-
-#define ACTIVATION_STEPS 5
-#define ADD_CONN_MAX_ATTEMPTS 5
 
 #ifndef DEBUG
 #define POPULATION_SIZE 16
@@ -29,13 +26,6 @@
 #define P_MUT_ADD_NODE 1.0f
 #endif
 
-#define DEFINE_STRUCT_DA(TYPE)                                                 \
-  typedef struct {                                                             \
-    struct TYPE *data;                                                         \
-    size_t size, cap;                                                          \
-  } TYPE##_DA
-
-#define DA_AT(DA, AT) DA->data[AT]
 #define DA_ADD(DA, EL)                                                         \
   if (DA->size + 1 >= DA->cap) {                                               \
     DA->cap *= 2;                                                              \
@@ -44,9 +34,15 @@
       exit(EXIT_FAILURE);                                                      \
   }                                                                            \
   EL = &DA_AT(DA, DA->size++)
+#define DA_AT(DA, AT) DA->data[AT]
 #define DA_FREE(DA)                                                            \
   free(DA->data);                                                              \
   free(DA)
+#define DEFINE_STRUCT_DA(TYPE)                                                 \
+  typedef struct {                                                             \
+    struct TYPE *data;                                                         \
+    size_t size, cap;                                                          \
+  } TYPE##_DA
 
 static inline float frand(float max) {
   return ((float)(random() % 1000)) * max / 1000.0f;
@@ -84,6 +80,9 @@ struct Hashtbl {
   struct Entry **entries;
   size_t size, cap;
 };
+static inline size_t hash_func(size_t in, size_t out, struct Hashtbl *h) {
+  return (((23 * 31 + in) * 31 + out) % h->cap);
+}
 
 struct Population {
   struct Genome *genomes;
@@ -91,6 +90,7 @@ struct Population {
 };
 
 // hashtbl {{{
+
 struct Hashtbl *init_hashtbl() {
   struct Hashtbl *h = malloc(sizeof(*h));
   if (!h)
@@ -117,7 +117,7 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
       struct Entry *e = old[i];
       while (e) {
         struct Entry *next = e->next;
-        size_t hash = HASH(e->in, e->out, h);
+        size_t hash = hash_func(e->in, e->out, h);
         e->next = h->entries[hash];
         h->entries[hash] = e;
         e = next;
@@ -126,7 +126,7 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
     free(old);
   }
 
-  size_t hash = HASH(in, out, h);
+  size_t hash = hash_func(in, out, h);
   struct Entry **e = &h->entries[hash];
   while (*e) {
     if ((*e)->in == in && (*e)->out == out)
@@ -146,6 +146,7 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
 // }}}
 
 // init_* {{{
+
 Conn_DA *init_conns() {
   Conn_DA *c = malloc(sizeof(*c));
   if (!c)
@@ -206,6 +207,7 @@ struct Population *init_population() {
 // }}}
 
 // dump {{{
+
 void dump(struct Population *p) {
   for (int i = 0; i < POPULATION_SIZE; i++) {
     printf("Genome %d:\n", i);
@@ -232,6 +234,7 @@ void dump(struct Population *p) {
 // }}}
 
 // wipe {{{
+
 void wipe(struct Population *p) {
   for (int i = 0; i < POPULATION_SIZE; i++) {
     DA_FREE(p->genomes[i].conns);
@@ -270,13 +273,11 @@ int compare_conn(const void *a, const void *b) {
   return 0;
 }
 
-struct Genome *crossover(struct Genome *g1, struct Genome *g2) {
-  struct Genome *child = malloc(sizeof(*child));
-  if (!child)
-    exit(EXIT_FAILURE);
+void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child) {
   child->conns = init_conns();
   child->nodes = init_nodes();
   child->nodes->size = 0;
+  child->fitness = 0.0f;
 
   struct Genome *mfit, *lfit;
   if (g1->fitness > g2->fitness) {
@@ -293,7 +294,7 @@ struct Genome *crossover(struct Genome *g1, struct Genome *g2) {
   qsort(g1->conns->data, g1->conns->size, sizeof(struct Conn), compare_conn);
   qsort(g2->conns->data, g2->conns->size, sizeof(struct Conn), compare_conn);
 
-  size_t i = 0, j = 0, max_id = 0;
+  size_t i = 0, j = 0, max_id = GENOME_INIT_SIZE - 1;
   while (i < mfit->conns->size && j < lfit->conns->size) {
     struct Conn *ci = &DA_AT(mfit->conns, i);
     struct Conn *cj = &DA_AT(lfit->conns, j);
@@ -337,13 +338,6 @@ struct Genome *crossover(struct Genome *g1, struct Genome *g2) {
     i++;
   }
 
-  // size_t max_id = 0;
-  // for (i = 0; i < child->conns->size; i++) {
-  //   if (DA_AT(child->conns, i).in > max_id)
-  //     max_id = DA_AT(child->conns, i).in;
-  //   if (DA_AT(child->conns, i).out > max_id)
-  //     max_id = DA_AT(child->conns, i).out;
-  // }
   char *added = calloc(max_id + 1, sizeof(char));
   if (!added)
     exit(EXIT_FAILURE);
@@ -377,19 +371,19 @@ struct Genome *crossover(struct Genome *g1, struct Genome *g2) {
   }
 
   free(added);
-  return child;
 }
 
 void reproduce(struct Population *p) {
   // TODO: evaluate, speciate, reproduce, mutate
-  struct Genome *x = crossover(&p->genomes[0], &p->genomes[1]);
   DA_FREE(p->genomes[2].conns);
   DA_FREE(p->genomes[2].nodes);
-  p->genomes[2] = *x;
-  free(x);
+  crossover(&p->genomes[0], &p->genomes[1], &p->genomes[2]);
 }
 
 // mutation {{{
+
+// Mutates the connection weights of a genome. Each weight has a chance to be
+// uniformly perturbed or assigned a new random value.
 void mutate_weights(struct Genome *g) {
   if (frand1() > P_MUT_WEIGHTS)
     return;
@@ -404,6 +398,8 @@ void mutate_weights(struct Genome *g) {
   }
 }
 
+// Adds a new connection between two existing nodes in a genome if one does not
+// already exist. The innovation is recorded in the history table.
 void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
   if (frand1() > P_MUT_ADD_CONN)
     return;
@@ -440,6 +436,8 @@ void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
   }
 }
 
+// Adds a new node to a genome by splitting an existing connection. The old
+// connection is disabled, and two new ones are created.
 void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   if (frand1() > P_MUT_ADD_NODE)
     return;
@@ -471,6 +469,8 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   n2->id = ht_insert(h, n2->in, n2->out);
 }
 
+// Applies all forms of mutation (weights, add connection, add node) to each
+// genome in the population.
 void mutate(struct Population *p) {
   /*
    * There was an 80% chance of a genome having its connection weights
@@ -492,6 +492,8 @@ void mutate(struct Population *p) {
 }
 // }}}
 
+// Main entry point for the neat program. Initializes a population,
+// performs mutations and reproduction, and cleans up.
 int main(int argc, char *argv[]) {
   // srandom(time(NULL));
   srandom(1);
