@@ -16,7 +16,7 @@
 #define DEBUG
 
 #ifndef DEBUG
-#define POPULATION_SIZE 16
+#define POPULATION_SIZE 32
 #define P_MUT_ADD_CONN 0.05f
 #define P_MUT_ADD_NODE 0.03f
 #define P_MUT_WEIGHTS 0.8f
@@ -40,6 +40,9 @@
   free(DA->data);                                                              \
   free(DA)
 #define DA_INIT(DA, N)                                                         \
+  DA = malloc(sizeof(*DA));                                                    \
+  if (!DA)                                                                     \
+    exit(EXIT_FAILURE);                                                        \
   DA->data = calloc(N, sizeof(*DA->data));                                     \
   if (!DA->data)                                                               \
     exit(EXIT_FAILURE);                                                        \
@@ -171,25 +174,33 @@ int ht_insert(struct Hashtbl *h, size_t in, size_t out) {
 
 // init_* {{{
 
-Conn_DA *init_conns() {
-  Conn_DA *c = malloc(sizeof(*c));
-  if (!c)
-    exit(EXIT_FAILURE);
+Conn_DA *init_conns(struct Hashtbl *h) {
+  Conn_DA *c;
   DA_INIT(c, DA_INIT_SIZE);
+  for (int i = 0; i < GENOME_NUM_IN; i++) {
+    for (int j = GENOME_NUM_IN; j < GENOME_INIT_SIZE; j++) {
+      struct Conn *t;
+      DA_ADD(c, t);
+      t->in = i;
+      t->out = j;
+      t->id = ht_insert(h, i, j);
+      t->weight = 1.0f;
+      t->enabled = TRUE;
+    }
+  }
   return c;
 }
 
 Node_DA *init_nodes() {
-  Node_DA *n = malloc(sizeof(*n));
-  if (!n)
-    exit(EXIT_FAILURE);
+  Node_DA *n;
   DA_INIT(n, DA_INIT_SIZE);
   for (int i = 0; i < GENOME_INIT_SIZE; i++) {
-    DA_AT(n, i).id = i;
-    DA_AT(n, i).type = i < GENOME_NUM_IN ? INPUT : OUTPUT;
-    DA_AT(n, i).value = 0.0f;
+    struct Node *t;
+    DA_ADD(n, t);
+    t->id = i;
+    t->type = i < GENOME_NUM_IN ? INPUT : OUTPUT;
+    t->value = 0.0f;
   }
-  n->size = GENOME_INIT_SIZE;
   return n;
 }
 
@@ -197,16 +208,17 @@ struct Population *init_population() {
   struct Population *p = malloc(sizeof(*p));
   if (!p)
     exit(EXIT_FAILURE);
-  p->genomes = malloc(sizeof(*p->genomes));
-  if (!p->genomes)
-    exit(EXIT_FAILURE);
-  DA_INIT(p->genomes, POPULATION_SIZE);
 
+  p->history = init_hashtbl();
+  if (!p->history)
+    exit(EXIT_FAILURE);
+
+  DA_INIT(p->genomes, POPULATION_SIZE);
   p->next_genome_id = 0;
   for (int i = 0; i < POPULATION_SIZE; i++) {
     struct Genome *g = &DA_AT(p->genomes, i);
     g->id = p->next_genome_id++;
-    g->conns = init_conns();
+    g->conns = init_conns(p->history);
     if (!g->conns)
       exit(EXIT_FAILURE);
     g->nodes = init_nodes();
@@ -216,15 +228,7 @@ struct Population *init_population() {
   }
   p->genomes->size = POPULATION_SIZE;
 
-  p->species = malloc(sizeof(*p->species));
-  if (!p->species)
-    exit(EXIT_FAILURE);
   DA_INIT(p->species, DA_INIT_SIZE);
-
-  p->history = init_hashtbl();
-  if (!p->history)
-    exit(EXIT_FAILURE);
-
   p->next_species_id = 0;
   p->C1 = 1.0f; // Disjoint coefficient
   p->C2 = 1.0f; // Excess coefficient
@@ -254,7 +258,7 @@ void dump(struct Population *p) {
     printf("  Connections: %zu\n", g->conns->size);
     for (int j = 0; j < g->conns->size; j++) {
       struct Conn *c = &DA_AT(g->conns, j);
-      printf("%c   [%2zu] %2zu %3zu | %7.3f\n", c->enabled ? ' ' : 'x', c->id,
+      printf("  %c [%2zu] %2zu %3zu | %7.3f\n", c->enabled ? ' ' : 'x', c->id,
              c->in, c->out, c->weight);
     }
   }
@@ -323,7 +327,7 @@ int compare_genome(const void *a, const void *b) {
   const struct Genome *g1 = *(const struct Genome **)a;
   const struct Genome *g2 = *(const struct Genome **)b;
   if (g1->fitness > g2->fitness)
-    return -1; // Descending order
+    return -1;
   if (g1->fitness < g2->fitness)
     return 1;
   return 0;
@@ -332,7 +336,8 @@ int compare_genome(const void *a, const void *b) {
 void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
                struct Population *p) {
   child->id = p->next_genome_id++;
-  child->conns = init_conns();
+  child->conns = init_conns(p->history);
+  child->conns->size = 0;
   child->nodes = init_nodes();
   child->nodes->size = 0;
   child->fitness = 0.0f;
@@ -427,7 +432,6 @@ void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
       added[c->out] = 1;
     }
   }
-
   free(added);
 }
 // }}}
@@ -436,12 +440,10 @@ void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
 
 float compatibility(struct Genome *g1, struct Genome *g2, float C1, float C2,
                     float C3) {
-  size_t i = 0, j = 0;
-  size_t e = 0;
-  size_t d = 0;
+  size_t i = 0, j = 0, e = 0, d = 0, m = 0;
   float w = 0.0;
-  size_t m = 0;
 
+  // TODO: ensure sorted
   size_t max_innov_g1 =
       (g1->conns->size > 0) ? DA_AT(g1->conns, g1->conns->size - 1).id : 0;
   size_t max_innov_g2 =
@@ -464,7 +466,6 @@ float compatibility(struct Genome *g1, struct Genome *g2, float C1, float C2,
       j++;
     }
   }
-
   while (i < g1->conns->size) {
     e++;
     i++;
@@ -481,65 +482,57 @@ float compatibility(struct Genome *g1, struct Genome *g2, float C1, float C2,
 
   float distance = (C1 * e / N) + (C2 * d / N);
 
-  if (m > 0) {
+  if (m > 0)
     distance += (C3 * w / m);
-  }
 
   return distance;
 }
 
 void speciate(struct Population *p) {
-  for (int i = 0; i < p->species->size; i++) {
+  for (int i = 0; i < p->species->size; i++)
     DA_AT(p->species, i).genomes->size = 0;
-  }
 
   for (int i = 0; i < p->genomes->size; i++) {
     struct Genome *g = &DA_AT(p->genomes, i);
-    char found = 0;
 
+    char found = 0;
     for (int j = 0; j < p->species->size; j++) {
       struct Species *s = &DA_AT(p->species, j);
       float d = compatibility(g, s->representative, p->C1, p->C2, p->C3);
 
       if (d < p->compatibility_threshold) {
+        // TODO: not DA_ADD
         DA_ADD(s->genomes, g);
         found = 1;
         break;
       }
     }
+    if (found)
+      continue;
 
-    if (!found) {
-      struct Species *new_s;
-      DA_ADD(p->species, new_s);
-      new_s->id = p->next_species_id++;
-      new_s->staleness = 0;
-      new_s->representative = g;
-      new_s->genomes = malloc(sizeof(*new_s->genomes));
-      if (!new_s->genomes)
-        exit(EXIT_FAILURE);
-      DA_INIT(new_s->genomes, POPULATION_SIZE);
-      DA_ADD(new_s->genomes, g);
-      new_s->species_total_fitness = 0.0f;
-    }
+    struct Species *new_s;
+    DA_ADD(p->species, new_s);
+    new_s->id = p->next_species_id++;
+    new_s->staleness = 0;
+    new_s->representative = g;
+    DA_INIT(new_s->genomes, POPULATION_SIZE);
+    // TODO: not DA_ADD
+    DA_ADD(new_s->genomes, g);
+    new_s->species_total_fitness = 0.0f;
   }
 
-  Species_DA *new_species_list = malloc(sizeof(*new_species_list));
-  if (!new_species_list)
-    exit(EXIT_FAILURE);
-  DA_INIT(new_species_list, p->species->size);
-
+  size_t valid = 0;
   for (int i = 0; i < p->species->size; i++) {
     struct Species *s = &DA_AT(p->species, i);
     if (s->genomes->size > 0) {
-      struct Species *t;
-      DA_ADD(new_species_list, t);
-      *t = *s;
+      if (valid != i)
+        DA_AT(p->species, i) = *s;
+      valid++;
     } else {
       DA_FREE(s->genomes);
     }
   }
-  DA_FREE(p->species);
-  p->species = new_species_list;
+  p->species->size = valid;
 }
 // }}}
 
@@ -575,9 +568,7 @@ void reproduce(struct Population *p) {
   speciate(p);
   share_species_fitness(p);
 
-  Genome_DA *next_genomes = malloc(sizeof(*next_genomes));
-  if (!next_genomes)
-    exit(EXIT_FAILURE);
+  Genome_DA *next_genomes;
   DA_INIT(next_genomes, POPULATION_SIZE);
 
   float population_total_fitness = 0.0f;
@@ -756,13 +747,17 @@ void mutate(struct Population *p) {
 // }}}
 
 int main(int argc, char *argv[]) {
-  srandom(time(NULL));
-  // srandom(1);
+  // srandom(time(NULL));
+  srandom(1);
   struct Population *p = init_population();
 
   dump(p);
   mutate(p);
+  evaluate(p);
+  reproduce(p);
   mutate(p);
+  // dump(p);
+  // mutate(p);
   evaluate(p);
   reproduce(p);
   dump(p);
