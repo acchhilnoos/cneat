@@ -1,3 +1,4 @@
+#include "da.h"
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -26,33 +27,6 @@
 #define P_MUT_ADD_NODE 1.0f
 #define P_MUT_WEIGHTS 1.0f
 #endif
-
-#define DA_ADD(DA, EL)                                                         \
-  if (DA->size + 1 >= DA->cap) {                                               \
-    DA->cap *= 2;                                                              \
-    DA->data = realloc(DA->data, DA->cap * sizeof(*DA->data));                 \
-    if (!DA->data)                                                             \
-      exit(EXIT_FAILURE);                                                      \
-  }                                                                            \
-  EL = &DA_AT(DA, DA->size++)
-#define DA_AT(DA, AT) DA->data[AT]
-#define DA_FREE(DA)                                                            \
-  free(DA->data);                                                              \
-  free(DA)
-#define DA_INIT(DA, N)                                                         \
-  DA = malloc(sizeof(*DA));                                                    \
-  if (!DA)                                                                     \
-    exit(EXIT_FAILURE);                                                        \
-  DA->data = calloc(N, sizeof(*DA->data));                                     \
-  if (!DA->data)                                                               \
-    exit(EXIT_FAILURE);                                                        \
-  DA->size = 0;                                                                \
-  DA->cap = N
-#define DEFINE_STRUCT_DA(TYPE)                                                 \
-  typedef struct {                                                             \
-    struct TYPE *data;                                                         \
-    size_t size, cap;                                                          \
-  } TYPE##_DA
 
 static inline float frand(float max) {
   return ((float)(random() % 1000)) * max / 1000.0f;
@@ -180,7 +154,7 @@ Conn_DA *init_conns(struct Hashtbl *h) {
   for (int i = 0; i < GENOME_NUM_IN; i++) {
     for (int j = GENOME_NUM_IN; j < GENOME_INIT_SIZE; j++) {
       struct Conn *t;
-      DA_ADD(c, t);
+      DA_ASSIGN_NEXT_USING(c, t);
       t->in = i;
       t->out = j;
       t->id = ht_insert(h, i, j);
@@ -196,7 +170,7 @@ Node_DA *init_nodes() {
   DA_INIT(n, DA_INIT_SIZE);
   for (int i = 0; i < GENOME_INIT_SIZE; i++) {
     struct Node *t;
-    DA_ADD(n, t);
+    DA_ASSIGN_NEXT_USING(n, t);
     t->id = i;
     t->type = i < GENOME_NUM_IN ? INPUT : OUTPUT;
     t->value = 0.0f;
@@ -365,7 +339,7 @@ void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
     if (ci->id == cj->id) {
       struct Conn *chosen = (random() % 2 == 0) ? ci : cj;
       struct Conn *c;
-      DA_ADD(child->conns, c);
+      DA_ASSIGN_NEXT_USING(child->conns, c);
       copy_conn(chosen, c);
       if (!ci->enabled || !cj->enabled) {
         if (frand1() < 0.75)
@@ -379,7 +353,7 @@ void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
       j++;
     } else if (ci->id < cj->id) {
       struct Conn *c;
-      DA_ADD(child->conns, c);
+      DA_ASSIGN_NEXT_USING(child->conns, c);
       copy_conn(ci, c);
       if (ci->in > max_id)
         max_id = ci->in;
@@ -392,7 +366,7 @@ void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
   }
   while (i < mfit->conns->size) {
     struct Conn *c;
-    DA_ADD(child->conns, c);
+    DA_ASSIGN_NEXT_USING(child->conns, c);
     copy_conn(&DA_AT(mfit->conns, i), c);
     if (DA_AT(mfit->conns, i).in > max_id)
       max_id = DA_AT(mfit->conns, i).in;
@@ -408,7 +382,7 @@ void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
   for (i = 0; i < GENOME_INIT_SIZE; i++) {
     if (!added[i]) {
       struct Node *n;
-      DA_ADD(child->nodes, n);
+      DA_ASSIGN_NEXT_USING(child->nodes, n);
       n->id = i;
       n->type = i < GENOME_NUM_IN ? INPUT : OUTPUT;
       added[i] = 1;
@@ -419,14 +393,14 @@ void crossover(struct Genome *g1, struct Genome *g2, struct Genome *child,
     struct Conn *c = &DA_AT(child->conns, i);
     if (!added[c->in]) {
       struct Node *n;
-      DA_ADD(child->nodes, n);
+      DA_ASSIGN_NEXT_USING(child->nodes, n);
       n->id = c->in;
       n->type = HIDDEN;
       added[c->in] = 1;
     }
     if (!added[c->out]) {
       struct Node *n;
-      DA_ADD(child->nodes, n);
+      DA_ASSIGN_NEXT_USING(child->nodes, n);
       n->id = c->out;
       n->type = HIDDEN;
       added[c->out] = 1;
@@ -501,8 +475,8 @@ void speciate(struct Population *p) {
       float d = compatibility(g, s->representative, p->C1, p->C2, p->C3);
 
       if (d < p->compatibility_threshold) {
-        // TODO: not DA_ADD
-        DA_ADD(s->genomes, g);
+        // TODO: DA_ADD
+        // DA_ASSIGN_NEXT_USING(s->genomes, g);
         found = 1;
         break;
       }
@@ -511,13 +485,13 @@ void speciate(struct Population *p) {
       continue;
 
     struct Species *new_s;
-    DA_ADD(p->species, new_s);
+    DA_ASSIGN_NEXT_USING(p->species, new_s);
     new_s->id = p->next_species_id++;
     new_s->staleness = 0;
     new_s->representative = g;
     DA_INIT(new_s->genomes, POPULATION_SIZE);
-    // TODO: not DA_ADD
-    DA_ADD(new_s->genomes, g);
+    // TODO: DA_ADD
+    // DA_ASSIGN_NEXT_USING(new_s->genomes, g);
     new_s->species_total_fitness = 0.0f;
   }
 
@@ -580,7 +554,7 @@ void reproduce(struct Population *p) {
     for (int i = 0; i < POPULATION_SIZE; ++i) {
       struct Genome *old_g = &DA_AT(p->genomes, i % p->genomes->size);
       struct Genome *new_g;
-      DA_ADD(next_genomes, new_g);
+      DA_ASSIGN_NEXT_USING(next_genomes, new_g);
       // TODO: Deep copy old_g to new_g, and assign new ID
       crossover(&DA_AT(p->genomes, 0), &DA_AT(p->genomes, 1), new_g, p);
     }
@@ -600,7 +574,7 @@ void reproduce(struct Population *p) {
       if (num_offspring > 0) {
         struct Genome *champion = &DA_AT(s->genomes, 0);
         struct Genome *new_g;
-        DA_ADD(next_genomes, new_g);
+        DA_ASSIGN_NEXT_USING(next_genomes, new_g);
         // TODO: Deep copy champion to new_g, and assign new ID
         crossover(champion, champion, new_g, p);
         num_offspring--;
@@ -614,7 +588,7 @@ void reproduce(struct Population *p) {
         struct Genome *parent2 = &DA_AT(s->genomes, random() % num_parents);
         struct Genome *child;
         // TODO: overpop check
-        DA_ADD(next_genomes, child);
+        DA_ASSIGN_NEXT_USING(next_genomes, child);
         crossover(parent1, parent2, child, p);
         // TODO: Apply mutation here after crossover
       }
@@ -623,7 +597,7 @@ void reproduce(struct Population *p) {
 
   while (next_genomes->size < POPULATION_SIZE) {
     struct Genome *new_g;
-    DA_ADD(next_genomes, new_g);
+    DA_ASSIGN_NEXT_USING(next_genomes, new_g);
     // Clone a random existing genome, or just use a dummy for now
     crossover(&DA_AT(p->genomes, 0), &DA_AT(p->genomes, 1), new_g, p);
   }
@@ -680,7 +654,7 @@ void mut_add_conn(struct Genome *g, struct Hashtbl *h) {
       continue;
 
     struct Conn *c;
-    DA_ADD(g->conns, c);
+    DA_ASSIGN_NEXT_USING(g->conns, c);
     c->in = in->id;
     c->out = out->id;
     c->weight = 1.0f;
@@ -699,7 +673,7 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
     return;
 
   struct Node *n;
-  DA_ADD(g->nodes, n);
+  DA_ASSIGN_NEXT_USING(g->nodes, n);
   n->id = next_node_id++;
   n->type = HIDDEN;
   n->value = 0.0f;
@@ -707,7 +681,7 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   c->enabled = FALSE;
 
   struct Conn *n1;
-  DA_ADD(g->conns, n1);
+  DA_ASSIGN_NEXT_USING(g->conns, n1);
   n1->in = c->in;
   n1->out = n->id;
   n1->weight = 1.0f;
@@ -715,7 +689,7 @@ void mut_add_node(struct Genome *g, struct Hashtbl *h) {
   n1->id = ht_insert(h, n1->in, n1->out);
 
   struct Conn *n2;
-  DA_ADD(g->conns, n2);
+  DA_ASSIGN_NEXT_USING(g->conns, n2);
   n2->in = n->id;
   n2->out = c->out;
   n2->weight = c->weight;
