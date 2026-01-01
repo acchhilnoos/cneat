@@ -1,7 +1,7 @@
 #ifndef DA_H
 #define DA_H
 
-#define DA_ASSIGN_NEXT_USING(DA, EL)                                           \
+#define DA_ADD(DA, EL)                                           \
   if (DA->size + 1 >= DA->cap) {                                               \
     DA->cap *= 2;                                                              \
     DA->data = realloc(DA->data, DA->cap * sizeof(*DA->data));                 \
